@@ -1,0 +1,14 @@
+# Streamlit server settings for the Excel validator.
+# maxUploadSize is in megabytes (default Streamlit limit is 200 MB).
+
+[server]
+maxUploadSize = 1024
+
+[theme]
+base = "dark"
+primaryColor = "#F2F2F3"
+backgroundColor = "#0B0B0C"
+secondaryBackgroundColor = "#141416"
+textColor = "#F2F2F3"
+borderColor = "#2E2E33"
+font = "sans serif"
