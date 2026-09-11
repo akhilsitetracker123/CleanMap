@@ -13,6 +13,7 @@ from ui_theme import APP_NAME, inject_theme
 
 LOGOUT_MARKER_COOKIE = "cleanmap_logged_out"
 COOKIE_MANAGER_KEY = "cleanmap_cookie_mgr"
+AUTHENTICATOR_KEY = "cleanmap_authenticator"
 
 APP_STATE_KEYS = (
     "validation_result",
@@ -106,16 +107,23 @@ def _ensure_auth_session_keys() -> None:
 
 
 def _get_authenticator() -> stauth.Authenticate:
-    """Build authenticator from secrets on every run (avoids stale cached passwords)."""
+    """Return a single authenticator per session (library creates CookieManager key='init')."""
     _ensure_auth_session_keys()
+    if AUTHENTICATOR_KEY in st.session_state:
+        return st.session_state[AUTHENTICATOR_KEY]
+
     auth = st.secrets["auth"]
-    return stauth.Authenticate(
+    authenticator = stauth.Authenticate(
         _build_credentials(),
         auth.get("cookie_name", "cleanmap_auth"),
         auth.get("cookie_key", "change_me"),
         float(auth.get("cookie_expiry_days", 30)),
         auto_hash=True,
     )
+    # Reuse our cookie manager so streamlit-authenticator does not mount a second one.
+    authenticator.cookie_controller.cookie_model.cookie_manager = _get_cookie_manager()
+    st.session_state[AUTHENTICATOR_KEY] = authenticator
+    return authenticator
 
 
 def _try_restore_session_from_cookie() -> None:
@@ -210,6 +218,7 @@ def clear_app_session_state() -> None:
 def perform_logout() -> None:
     """Clear auth cookie/session and app workflow state."""
     _ensure_auth_session_keys()
+    st.session_state.pop(AUTHENTICATOR_KEY, None)
 
     if auth_is_configured():
         authenticator = _get_authenticator()
