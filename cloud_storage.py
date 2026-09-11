@@ -35,17 +35,27 @@ def cloud_is_configured() -> bool:
         return False
 
 
+_CLOUD_STORAGE_KEY = "cleanmap_cloud_storage"
+
+
 def get_cloud_storage() -> "CloudStorage | None":
     if not cloud_is_configured():
         return None
-    if "cleanmap_cloud_storage" not in st.session_state:
+
+    cached = st.session_state.get(_CLOUD_STORAGE_KEY)
+    # Drop instances created before new methods were added (reload/dev deploy cache).
+    if cached is not None and not hasattr(cached, "list_all_files"):
+        del st.session_state[_CLOUD_STORAGE_KEY]
+        cached = None
+
+    if cached is None:
         cloud = st.secrets["cloud"]
-        st.session_state["cleanmap_cloud_storage"] = CloudStorage(
+        st.session_state[_CLOUD_STORAGE_KEY] = CloudStorage(
             url=str(cloud["supabase_url"]),
             key=str(cloud["supabase_key"]),
             bucket=str(cloud["bucket"]),
         )
-    return st.session_state["cleanmap_cloud_storage"]
+    return st.session_state[_CLOUD_STORAGE_KEY]
 
 
 class CloudStorage:
