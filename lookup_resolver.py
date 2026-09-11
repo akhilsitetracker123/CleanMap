@@ -207,9 +207,54 @@ def lookup_resolution_issues(
     df: pd.DataFrame,
     lookup_fields: dict[str, str],
     lookup_tables: dict[str, pd.DataFrame] | None = None,
+    warn_unresolved: bool = False,
 ) -> list[ValidationIssue]:
-    """Unresolved lookup values are left blank; no validation issues are raised."""
-    return []
+    """
+    Optionally flag lookup names that could not be resolved.
+
+    When warn_unresolved is True and a reference file was loaded for the object,
+    unmatched names produce warnings (not errors) so Status stays Ready unless
+    other errors exist. Unresolved Id cells remain blank for export.
+    """
+    if not warn_unresolved:
+        return []
+
+    lookup_tables = lookup_tables or {}
+    issues: list[ValidationIssue] = []
+
+    for col, object_name in lookup_fields.items():
+        reference = lookup_tables.get(object_name)
+        if reference is None or reference.empty:
+            continue
+
+        id_col = resolved_id_column(col)
+        if id_col not in df.columns:
+            continue
+
+        for idx, row in df.iterrows():
+            source = row[col]
+            resolved = row[id_col]
+            if _is_empty(source):
+                continue
+            text = str(source).strip()
+            if SF_ID_VALUE_PATTERN.match(text):
+                continue
+            if _is_empty(resolved):
+                issues.append(
+                    ValidationIssue(
+                        row=int(idx) + 2,
+                        column=col,
+                        value=source,
+                        rule="lookup_unresolved",
+                        message=(
+                            f"Lookup name '{text}' did not match any {object_name} "
+                            "record in the reference file"
+                        ),
+                        severity="warning",
+                    )
+                )
+
+    return issues
 
 
 def lookup_name_export_column(column: str) -> str:
