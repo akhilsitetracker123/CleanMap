@@ -110,6 +110,16 @@ class CloudStorage:
         files.sort(key=lambda item: item.name, reverse=True)
         return files
 
+    def list_all_files(self, username: str) -> list[CloudFile]:
+        files: list[CloudFile] = []
+        for category in ("uploads", "lookups", "field_definitions", "outputs"):
+            files.extend(self.list_files(username, category))
+        files.sort(key=lambda item: item.name, reverse=True)
+        return files
+
+    def delete_file(self, path: str) -> None:
+        self._client.storage.from_(self.bucket).remove([path])
+
     def download_bytes(self, path: str) -> bytes:
         return self._client.storage.from_(self.bucket).download(path)
 

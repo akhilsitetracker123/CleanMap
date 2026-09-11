@@ -59,10 +59,9 @@ from auth import (
 )
 from cloud_storage import get_cloud_storage
 from cloud_ui import (
-    render_cloud_files_panel,
-    resolve_main_file_from_cloud,
+    handle_pending_cloud_delete,
+    render_cloud_storage_sidebar,
     save_output_to_cloud,
-    save_uploaded_file_to_cloud,
 )
 from ui_theme import (
     APP_NAME,
@@ -141,6 +140,8 @@ def main() -> None:
         st.stop()
 
     cloud = get_cloud_storage()
+    if cloud and username != "local":
+        handle_pending_cloud_delete(cloud)
 
     if auth_is_configured() and username != "local":
         _header_spacer, _logout_col = st.columns([6, 1])
@@ -148,6 +149,10 @@ def main() -> None:
             render_logout_button(location="header")
 
     render_app_header()
+    cloud_message = st.session_state.pop("cloud_user_message", None)
+    if cloud_message:
+        st.success(cloud_message)
+
     config = _load_config()
 
     with st.sidebar:
@@ -156,8 +161,7 @@ def main() -> None:
             st.caption(f"Signed in as **{username}**")
         render_logout_button()
         if cloud and username != "local":
-            render_cloud_files_panel(cloud, username)
-            st.divider()
+            render_cloud_storage_sidebar(cloud, username)
         st.markdown("##### Processing options")
         apply_cleansing = st.checkbox(
             "Auto-cleanse (trim whitespace, normalize blanks)",
@@ -174,7 +178,7 @@ def main() -> None:
         use_local_path = False
         local_path = ""
         if cloud and username != "local":
-            st.caption("Cloud mode is on — upload files here or load a saved upload from step 1.")
+            st.caption("Use **Upload files to cloud** in the sidebar to store or manage files.")
         else:
             use_local_path = st.checkbox(
                 "Load from local file path",
@@ -199,19 +203,7 @@ def main() -> None:
     main_file = None
     file_key = None
 
-    if cloud and username != "local":
-        file_source = st.radio(
-            "File source",
-            options=["Upload new file", "Load from cloud"],
-            horizontal=True,
-            key="main_file_source",
-        )
-    else:
-        file_source = "Upload new file"
-
-    if file_source == "Load from cloud" and cloud:
-        main_file, file_key = resolve_main_file_from_cloud(cloud, username)
-    elif use_local_path:
+    if use_local_path:
         st.caption("Using local file path — no browser upload.")
         main_file, file_key = _resolve_main_file(use_local_path, local_path, None)
     else:
@@ -221,17 +213,8 @@ def main() -> None:
             key="main_file_uploader",
         )
         main_file, file_key = _resolve_main_file(False, "", uploaded_file)
-        if uploaded_file is not None and cloud:
-            cloud_upload_key = f"upload:{username}:{file_key}"
-            if st.session_state.get("cloud_saved_upload_key") != cloud_upload_key:
-                cloud_path = save_uploaded_file_to_cloud(
-                    cloud, username, "uploads", uploaded_file, uploaded_file.name
-                )
-                if cloud_path:
-                    st.session_state["cloud_saved_upload_key"] = cloud_upload_key
-                    st.success("Main file saved to cloud.")
-            if hasattr(uploaded_file, "seek"):
-                uploaded_file.seek(0)
+        if uploaded_file is not None and hasattr(uploaded_file, "seek"):
+            uploaded_file.seek(0)
 
     if main_file:
         try:
@@ -351,13 +334,6 @@ def main() -> None:
                             lookup_tables[object_name] = ref_df
                             st.session_state["lookup_tables"] = lookup_tables
                             st.success(f"Loaded **{len(ref_df)}** {object_name} records.")
-                            save_uploaded_file_to_cloud(
-                                cloud,
-                                username,
-                                "lookups",
-                                lookup_upload,
-                                f"{object_name}_{lookup_upload.name}",
-                            )
                         except Exception as exc:
                             st.error(f"Could not read {object_name} lookup file: {exc}")
 
@@ -420,13 +396,6 @@ def main() -> None:
                         f"Loaded field definition for **{field_def.object_label or 'object'}** "
                         f"(`{field_def.object_api_name or 'n/a'}`) with "
                         f"**{field_def.validated_field_count}** picklist field(s)."
-                    )
-                    save_uploaded_file_to_cloud(
-                        cloud,
-                        username,
-                        "field_definitions",
-                        field_def_upload,
-                        field_def_upload.name,
                     )
                     if matched:
                         st.caption(
@@ -519,7 +488,6 @@ def main() -> None:
                     )
                 st.session_state["validation_result"] = result
                 st.session_state["lookup_stats"] = lookup_stats
-                st.session_state.pop("cloud_saved_output_key", None)
 
             result = st.session_state.get("validation_result")
 
@@ -635,18 +603,31 @@ def main() -> None:
                         excel_bytes = buffer.getvalue()
                         file_name = "cleansed_output.xlsx"
 
-                    st.download_button(
-                        "Download Cleansed Excel",
-                        data=excel_bytes,
-                        file_name=file_name,
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    )
-                    output_cloud_key = f"output:{username}:{file_key}:{file_name}:{result.error_count}"
-                    if st.session_state.get("cloud_saved_output_key") != output_cloud_key:
-                        cloud_path = save_output_to_cloud(cloud, username, file_name, excel_bytes)
-                        if cloud_path:
-                            st.session_state["cloud_saved_output_key"] = output_cloud_key
-                            st.success("Cleansed file saved to your cloud folder (see sidebar).")
+                    dl_col, cloud_col = st.columns([1, 1])
+                    with dl_col:
+                        st.download_button(
+                            "Download Cleansed Excel",
+                            data=excel_bytes,
+                            file_name=file_name,
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True,
+                        )
+                    with cloud_col:
+                        if cloud and username != "local":
+                            if st.button(
+                                "Save to cloud",
+                                key="save_cleansed_to_cloud",
+                                use_container_width=True,
+                            ):
+                                cloud_path = save_output_to_cloud(
+                                    cloud, username, file_name, excel_bytes
+                                )
+                                if cloud_path:
+                                    st.session_state["cloud_user_message"] = (
+                                        "Cleansed file saved to cloud — open "
+                                        "**Upload files to cloud** in the sidebar to manage it."
+                                    )
+                                    st.rerun()
             else:
                 st.info("Review field types, upload lookup files if needed, then click **Run validation**.")
 

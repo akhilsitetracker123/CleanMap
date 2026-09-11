@@ -2,97 +2,135 @@
 
 from __future__ import annotations
 
-import io
 from typing import Any
 
 import streamlit as st
 
-from cloud_storage import CloudStorage, bytes_to_filelike, guess_mime, read_source_bytes
+from cloud_storage import CloudStorage, guess_mime, read_source_bytes
 
 CLOUD_CATEGORIES = (
-    ("uploads", "Main Excel uploads"),
-    ("lookups", "Lookup reference files"),
-    ("field_definitions", "Field definition files"),
-    ("outputs", "Cleansed outputs"),
+    ("uploads", "Main Excel"),
+    ("lookups", "Lookup reference"),
+    ("field_definitions", "Field definition"),
+    ("outputs", "Cleansed output"),
 )
 
-
-def render_cloud_files_panel(cloud: CloudStorage, username: str) -> None:
-    st.markdown("##### My cloud files")
-    st.caption("Files saved to your private cloud folder.")
-    for category, label in CLOUD_CATEGORIES:
-        files = cloud.list_files(username, category)
-        with st.expander(f"{label} ({len(files)})", expanded=False):
-            if not files:
-                st.caption("No files yet.")
-                continue
-            for item in files[:20]:
-                cols = st.columns([3, 1])
-                with cols[0]:
-                    st.text(item.name)
-                with cols[1]:
-                    try:
-                        data = cloud.download_bytes(item.path)
-                        st.download_button(
-                            "Get",
-                            data=data,
-                            file_name=item.name.split("_", 1)[-1]
-                            if "_" in item.name
-                            else item.name,
-                            mime=guess_mime(item.name),
-                            key=f"cloud_dl_{item.path}",
-                        )
-                    except Exception as exc:
-                        st.caption(f"Error: {exc}")
+CATEGORY_LABELS = dict(CLOUD_CATEGORIES)
 
 
-def resolve_main_file_from_cloud(
-    cloud: CloudStorage,
-    username: str,
-) -> tuple[Any, str | None]:
-    files = cloud.list_files(username, "uploads")
-    if not files:
-        st.info("No saved uploads yet. Upload a file below — it will be saved to the cloud.")
-        return None, None
+def display_file_name(storage_name: str) -> str:
+    """Strip the upload timestamp prefix from stored object names."""
+    parts = storage_name.split("_", 2)
+    if len(parts) == 3 and parts[0].isdigit() and len(parts[0]) == 8:
+        return parts[2]
+    if "_" in storage_name:
+        return storage_name.split("_", 1)[-1]
+    return storage_name
 
-    labels = [file.name for file in files]
-    selected_name = st.selectbox(
-        "Select a saved upload",
-        options=labels,
-        key="cloud_main_file_select",
+
+def handle_pending_cloud_delete(cloud: CloudStorage | None) -> None:
+    """Delete a cloud file after the user clicks Delete (button callback order)."""
+    if cloud is None:
+        st.session_state.pop("cloud_pending_delete_path", None)
+        return
+    path = st.session_state.pop("cloud_pending_delete_path", None)
+    if not path:
+        return
+    try:
+        cloud.delete_file(path)
+        st.session_state["cloud_last_action"] = "deleted"
+    except Exception as exc:
+        st.session_state["cloud_last_error"] = str(exc)
+    st.rerun()
+
+
+def render_cloud_storage_sidebar(cloud: CloudStorage, username: str) -> None:
+    """Sidebar panel: upload files to cloud, browse all files, download, delete."""
+    st.divider()
+    if not st.toggle("Upload files to cloud", key="cloud_storage_open"):
+        return
+
+    st.caption("Store Excel files in your private cloud folder. This is separate from Step 1.")
+
+    category = st.selectbox(
+        "File type",
+        options=[key for key, _ in CLOUD_CATEGORIES],
+        format_func=lambda key: CATEGORY_LABELS.get(key, key),
+        key="cloud_upload_category",
     )
-    selected = next(file for file in files if file.name == selected_name)
-    try:
-        data = cloud.download_bytes(selected.path)
-    except Exception as exc:
-        st.error(f"Could not load cloud file: {exc}")
-        return None, None
-    st.success(f"Loaded from cloud: **{selected.name}**")
-    return bytes_to_filelike(data), f"cloud:{selected.path}"
+    upload_file = st.file_uploader(
+        "Choose file",
+        type=["xlsx", "xls"],
+        key="cloud_sidebar_uploader",
+    )
 
+    if st.button("Upload to cloud", type="primary", use_container_width=True):
+        if upload_file is None:
+            st.warning("Choose a file first.")
+        else:
+            try:
+                upload_file.seek(0)
+                data = read_source_bytes(upload_file)
+                cloud.save_bytes(
+                    username,
+                    category,
+                    upload_file.name,
+                    data,
+                    content_type=guess_mime(upload_file.name),
+                )
+                st.session_state["cloud_last_action"] = "uploaded"
+                st.session_state.pop("cloud_last_error", None)
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Upload failed: {exc}")
 
-def save_uploaded_file_to_cloud(
-    cloud: CloudStorage | None,
-    username: str,
-    category: str,
-    source: Any,
-    filename: str,
-) -> str | None:
-    if cloud is None or username == "local":
-        return None
-    try:
-        data = read_source_bytes(source)
-        path = cloud.save_bytes(
-            username,
-            category,
-            filename,
-            data,
-            content_type=guess_mime(filename),
-        )
-        return path
-    except Exception as exc:
-        st.warning(f"Could not save {filename} to cloud: {exc}")
-        return None
+    last_action = st.session_state.pop("cloud_last_action", None)
+    if last_action == "uploaded":
+        st.success("File uploaded to cloud.")
+    elif last_action == "deleted":
+        st.success("File deleted from cloud.")
+    cloud_error = st.session_state.pop("cloud_last_error", None)
+    if cloud_error:
+        st.error(f"Cloud action failed: {cloud_error}")
+
+    st.markdown("##### All files in cloud")
+    files = cloud.list_all_files(username)
+    if not files:
+        st.caption("No files in cloud yet.")
+        return
+
+    for item in files:
+        label = CATEGORY_LABELS.get(item.category, item.category)
+        display_name = display_file_name(item.name)
+        st.markdown(f"**{display_name}**")
+        st.caption(f"{label} · {item.name}")
+
+        action_cols = st.columns([1, 1])
+        with action_cols[0]:
+            try:
+                data = cloud.download_bytes(item.path)
+                st.download_button(
+                    "Download",
+                    data=data,
+                    file_name=display_name,
+                    mime=guess_mime(display_name),
+                    key=f"cloud_dl_{item.path}",
+                    use_container_width=True,
+                )
+            except Exception as exc:
+                st.caption(f"Error: {exc}")
+
+        with action_cols[1]:
+            if st.button(
+                "Delete",
+                key=f"cloud_del_{item.path}",
+                use_container_width=True,
+                type="secondary",
+            ):
+                st.session_state["cloud_pending_delete_path"] = item.path
+                st.rerun()
+
+        st.divider()
 
 
 def save_output_to_cloud(
