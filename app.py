@@ -49,7 +49,14 @@ from validator import (
     load_rules,
     validate_dataframe,
 )
-from auth import auth_is_configured, get_authenticated_username, render_login_page, render_logout_button
+from auth import (
+    auth_is_configured,
+    get_authenticated_username,
+    handle_pending_logout,
+    mount_cookie_manager,
+    render_login_page,
+    render_logout_button,
+)
 from cloud_storage import get_cloud_storage
 from cloud_ui import (
     render_cloud_files_panel,
@@ -124,6 +131,9 @@ def main() -> None:
         initial_sidebar_state="expanded",
     )
     inject_theme()
+    mount_cookie_manager()
+
+    handle_pending_logout()
 
     username = get_authenticated_username()
     if username is None:

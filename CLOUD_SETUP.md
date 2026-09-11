@@ -47,7 +47,7 @@ cookie_expiry_days = 30
 
 [auth.credentials.usernames.admin]
 email = "admin@yourcompany.com"
-name = "Admin User"
+name = "admin"
 password = "YourSecurePassword123"
 
 [cloud]
