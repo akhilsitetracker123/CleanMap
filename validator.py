@@ -56,6 +56,15 @@ WEBSITE_PATTERN = re.compile(
 )
 OUTPUT_DATE_FORMAT = "%Y-%m-%d"
 ISO_DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+YEAR_ONLY_PATTERN = re.compile(r"^\d{4}$")
+# Calendar years often typed alone in bad migration data (not Excel serials).
+YEAR_ONLY_INTEGER_MIN = 1900
+YEAR_ONLY_INTEGER_MAX = 2100
+# Excel serial 0/1 appear as these dates when pandas reads date-formatted cells.
+EXCEL_ZERO_DATE_STRINGS = frozenset({"1899-12-30", "1899-12-31"})
+INVALID_ZERO_DATE_MESSAGE = (
+    "Invalid date: value is not a valid date (use YYYY-MM-DD or leave blank)"
+)
 # e.g. 09/082026 → missing "/" before year → 09/08/2026
 MISSING_YEAR_SLASH_PATTERN = re.compile(r"^(\d{1,2})/(\d{2})(\d{4})$")
 # e.g. 09/82026 → single-digit month run into year → 9/8/2026
@@ -228,33 +237,108 @@ def _fix_zero_month_day(text: str) -> str:
     return text
 
 
+def _is_excel_epoch_zero_date(value: Any) -> bool:
+    """True when Excel/pandas turned numeric 0 into an 1899 epoch date."""
+    if isinstance(value, str):
+        return value.strip() in EXCEL_ZERO_DATE_STRINGS
+
+    if isinstance(value, pd.Timestamp):
+        return not pd.isna(value) and value.strftime(OUTPUT_DATE_FORMAT) in EXCEL_ZERO_DATE_STRINGS
+
+    if isinstance(value, datetime):
+        return value.strftime(OUTPUT_DATE_FORMAT) in EXCEL_ZERO_DATE_STRINGS
+
+    if hasattr(value, "to_pydatetime"):
+        try:
+            return (
+                value.to_pydatetime().strftime(OUTPUT_DATE_FORMAT) in EXCEL_ZERO_DATE_STRINGS
+            )
+        except (ValueError, TypeError, AttributeError):
+            return False
+
+    return False
+
+
+def _date_placeholder_error(value: Any) -> str | None:
+    """Reject zero and year-only values that must not be normalized as dates."""
+    if _is_excel_epoch_zero_date(value):
+        return INVALID_ZERO_DATE_MESSAGE
+
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if value == 0 or value == 0.0:
+            return (
+                f"Invalid date: '{value}' is not a valid date "
+                "(use YYYY-MM-DD or leave blank)"
+            )
+        if float(value).is_integer():
+            year_like = int(value)
+            if YEAR_ONLY_INTEGER_MIN <= year_like <= YEAR_ONLY_INTEGER_MAX:
+                return (
+                    f"Invalid date: expected full date (YYYY-MM-DD), "
+                    f"not year only: '{value}'"
+                )
+        return None
+
+    if isinstance(value, str):
+        text = value.strip()
+        if text in ("0", "0.0"):
+            return (
+                f"Invalid date: '{text}' is not a valid date "
+                "(use YYYY-MM-DD or leave blank)"
+            )
+        if YEAR_ONLY_PATTERN.match(text):
+            return (
+                f"Invalid date: expected full date (YYYY-MM-DD), "
+                f"not year only: '{text}'"
+            )
+    return None
+
+
 def parse_date_value(value: Any) -> tuple[str | None, str | None]:
     """Parse a date from many formats and return (YYYY-MM-DD, error_message)."""
     if _is_empty(value):
         return None, None
 
+    placeholder_error = _date_placeholder_error(value)
+    if placeholder_error:
+        return None, placeholder_error
+
     if isinstance(value, pd.Timestamp):
+        if pd.isna(value):
+            return None, None
+        if _is_excel_epoch_zero_date(value):
+            return None, INVALID_ZERO_DATE_MESSAGE
         return value.strftime(OUTPUT_DATE_FORMAT), None
 
     if isinstance(value, datetime):
+        if _is_excel_epoch_zero_date(value):
+            return None, INVALID_ZERO_DATE_MESSAGE
         return value.strftime(OUTPUT_DATE_FORMAT), None
 
     if hasattr(value, "to_pydatetime"):
         try:
-            return value.to_pydatetime().strftime(OUTPUT_DATE_FORMAT), None
+            dt = value.to_pydatetime()
+            if _is_excel_epoch_zero_date(dt):
+                return None, INVALID_ZERO_DATE_MESSAGE
+            return dt.strftime(OUTPUT_DATE_FORMAT), None
         except (ValueError, TypeError, AttributeError):
             pass
 
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         try:
             parsed = pd.Timestamp("1899-12-30") + pd.Timedelta(days=float(value))
-            return parsed.strftime(OUTPUT_DATE_FORMAT), None
+            formatted = parsed.strftime(OUTPUT_DATE_FORMAT)
+            if formatted in EXCEL_ZERO_DATE_STRINGS:
+                return None, INVALID_ZERO_DATE_MESSAGE
+            return formatted, None
         except (ValueError, OverflowError):
             return None, f"Could not parse Excel date number: '{value}'"
 
     if isinstance(value, str):
         text = _fix_zero_month_day(value.strip())
         if ISO_DATE_PATTERN.match(text):
+            if text in EXCEL_ZERO_DATE_STRINGS:
+                return None, INVALID_ZERO_DATE_MESSAGE
             try:
                 datetime.strptime(text, OUTPUT_DATE_FORMAT)
                 return text, None
