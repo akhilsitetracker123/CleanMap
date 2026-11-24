@@ -27,8 +27,6 @@ APP_STATE_KEYS = (
     "lookup_tables",
     "lookup_stats",
     "field_definition",
-    "cloud_saved_upload_key",
-    "cloud_saved_output_key",
     "local_mode_confirmed",
 )
 
@@ -220,7 +218,7 @@ def render_login_page() -> None:
         f"""
         <div style="text-align:center;padding:2rem 0 1rem;">
             <h1 style="font-size:2.5rem;margin-bottom:0.25rem;">{APP_NAME}</h1>
-            <p style="color:#A1A1A8;">Sign in to validate and store migration files in the cloud.</p>
+            <p style="color:#A1A1A8;">Sign in to validate and cleanse migration Excel files.</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -229,7 +227,7 @@ def render_login_page() -> None:
     if not auth_is_configured():
         st.warning(
             "Login is not configured yet. For local use, the app runs without sign-in. "
-            "See **CLOUD_SETUP.md** to enable username/password and cloud storage."
+            "See **CLOUD_SETUP.md** to enable username/password login on Streamlit Cloud."
         )
         if st.button("Continue without login (local only)", type="primary"):
             st.session_state["local_mode_confirmed"] = True

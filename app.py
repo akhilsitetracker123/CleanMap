@@ -10,8 +10,6 @@ import streamlit as st
 
 
 import auth
-import cloud_storage
-import cloud_ui
 import field_definition
 import lookup_resolver
 import schema
@@ -26,8 +24,6 @@ importlib.reload(lookup_resolver)
 importlib.reload(field_definition)
 importlib.reload(validator)
 importlib.reload(auth)
-importlib.reload(cloud_storage)
-importlib.reload(cloud_ui)
 
 
 from field_definition import ObjectFieldDefinition, read_object_field_definition
@@ -56,15 +52,6 @@ from auth import (
     mount_cookie_manager,
     render_login_page,
     render_logout_button,
-)
-from cloud_storage import cloud_storage_requested, get_cloud_storage
-from cloud_ui import (
-    handle_pending_cloud_delete,
-    mirror_bytes_to_cloud_once,
-    mirror_workflow_file_to_cloud_once,
-    render_cloud_storage_setup_hint,
-    render_cloud_storage_sidebar,
-    workflow_cloud_enabled,
 )
 from ui_theme import (
     APP_NAME,
@@ -142,19 +129,12 @@ def main() -> None:
         render_login_page()
         st.stop()
 
-    cloud = get_cloud_storage()
-    if cloud and username != "local":
-        handle_pending_cloud_delete(cloud, username)
-
     if auth_is_configured() and username != "local":
         _header_spacer, _logout_col = st.columns([6, 1])
         with _logout_col:
             render_logout_button(location="header")
 
     render_app_header()
-    cloud_message = st.session_state.pop("cloud_user_message", None)
-    if cloud_message:
-        st.success(cloud_message)
 
     config = _load_config()
 
@@ -163,11 +143,6 @@ def main() -> None:
         if username != "local":
             st.caption(f"Signed in as **{username}**")
         render_logout_button()
-        if username != "local":
-            if cloud:
-                render_cloud_storage_sidebar(cloud, username)
-            elif cloud_storage_requested():
-                render_cloud_storage_setup_hint()
         st.markdown("##### Processing options")
         apply_cleansing = st.checkbox(
             "Auto-cleanse (trim whitespace, normalize blanks)",
@@ -183,12 +158,7 @@ def main() -> None:
         st.markdown("##### Large files")
         use_local_path = False
         local_path = ""
-        if workflow_cloud_enabled(cloud, username):
-            st.caption(
-                "Use **Upload from your computer** in each step. Files are stored in the "
-                "sidebar **File bucket** until an admin removes them."
-            )
-        else:
+        if username == "local":
             use_local_path = st.checkbox(
                 "Load from local file path",
                 value=False,
@@ -206,6 +176,11 @@ def main() -> None:
                     "Browser uploads are limited by `server.maxUploadSize` in `.streamlit/config.toml` "
                     "(currently 1024 MB). Restart Streamlit after changing it."
                 )
+        else:
+            st.caption(
+                "Upload Excel files from your computer in each workflow step. "
+                "Files are not stored on the server after your session."
+            )
 
     render_section_heading("01", "Load main Excel file")
     uploaded_file = None
@@ -224,11 +199,6 @@ def main() -> None:
         main_file, file_key = _resolve_main_file(False, "", uploaded_file)
         if uploaded_file is not None and hasattr(uploaded_file, "seek"):
             uploaded_file.seek(0)
-
-    if main_file and file_key:
-        mirror_workflow_file_to_cloud_once(
-            cloud, username, "uploads", file_key, main_file,
-        )
 
     if main_file:
         try:
@@ -346,16 +316,6 @@ def main() -> None:
                         try:
                             if hasattr(lookup_file, "seek"):
                                 lookup_file.seek(0)
-                            lookup_key = f"{object_name}:{_file_key(lookup_file)}"
-                            mirror_workflow_file_to_cloud_once(
-                                cloud,
-                                username,
-                                "lookups",
-                                lookup_key,
-                                lookup_file,
-                            )
-                            if hasattr(lookup_file, "seek"):
-                                lookup_file.seek(0)
                             ref_df = read_lookup_reference_file(lookup_file)
                             lookup_tables[object_name] = ref_df
                             st.session_state["lookup_tables"] = lookup_tables
@@ -411,16 +371,6 @@ def main() -> None:
 
             if field_def_file:
                 try:
-                    if hasattr(field_def_file, "seek"):
-                        field_def_file.seek(0)
-                    field_key = _file_key(field_def_file)
-                    mirror_workflow_file_to_cloud_once(
-                        cloud,
-                        username,
-                        "field_definitions",
-                        field_key,
-                        field_def_file,
-                    )
                     if hasattr(field_def_file, "seek"):
                         field_def_file.seek(0)
                     field_def = read_object_field_definition(field_def_file)
@@ -640,16 +590,6 @@ def main() -> None:
                         export_df.to_excel(buffer, index=False, engine="openpyxl")
                         excel_bytes = buffer.getvalue()
                         file_name = "cleansed_output.xlsx"
-
-                    output_sync_key = f"{file_key}:{file_name}"
-                    mirror_bytes_to_cloud_once(
-                        cloud,
-                        username,
-                        "outputs",
-                        output_sync_key,
-                        file_name,
-                        excel_bytes,
-                    )
 
                     st.download_button(
                         "Download Cleansed Excel",

@@ -8,4 +8,3 @@ __pycache__/
 .env
 .env.*
 .streamlit/secrets.toml
-.streamlit/STREAMLIT_CLOUD_SECRETS_BITBUCKET.toml
