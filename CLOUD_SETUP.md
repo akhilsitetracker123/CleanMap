@@ -28,11 +28,30 @@ Use a **separate repository** for migration files (e.g. `cleanmap-data`), **not*
 2. Create repo **`cleanmap-data`** (private).
 3. Default branch **`main`** is fine.
 
-### A2. Create an App Password
+### A2. Create a Bitbucket API token (not your login password)
 
-1. [App passwords](https://bitbucket.org/account/settings/app-passwords/)
-2. Permissions: **Repositories: Read, Write**
-3. Copy the password once.
+Your normal Bitbucket **account password will not work** with the REST API.
+
+**API tokens are not under “Bitbucket personal settings”.** They live on your **Atlassian account**:
+
+1. In Bitbucket, click your **avatar** (top-right) → **Account settings** (opens Atlassian account), **or** go directly to [Atlassian API tokens](https://id.atlassian.com/manage-profile/security/api-tokens).
+2. Open the **Security** tab → **Create and manage API tokens** → **Create API token with scopes**.
+3. Name it (e.g. `cleanmap-cloud`), set expiry, choose app **Bitbucket**.
+4. Scopes (minimum for CleanMap file storage), scoped to workspace **sitetraker** when asked.
+
+   You must tick these **exact** repository scopes (under Bitbucket → Repositories):
+
+   | Scope | Purpose |
+   |-------|---------|
+   | `read:repository:bitbucket` | List/download files |
+   | `write:repository:bitbucket` | Upload/delete files |
+
+   **Admin scopes alone do not work** (`admin:repository`, `admin:workspace`, `delete:*`, etc. do not satisfy `read:repository:bitbucket`). If verify returns HTTP 403 with “lack privilege scopes”, create a **new** token with the two scopes above.
+5. Copy the token once (you cannot view it again).
+
+If you **do not see** “Create and manage API tokens”, your org may restrict tokens — ask your **Atlassian/Bitbucket admin** to allow user API tokens or provision one for `cleanmap-data`.
+
+**Legacy App passwords** (only if still listed): [bitbucket.org/account/settings/app-passwords](https://bitbucket.org/account/settings/app-passwords/) — use Bitbucket **username** (from [Bitbucket account settings](https://bitbucket.org/account/settings/)), not email, plus the app password.
 
 ### A3. Secrets (Streamlit Cloud or `.streamlit/secrets.toml`)
 
@@ -44,9 +63,11 @@ bitbucket_workspace = "sitetraker"
 bitbucket_repo = "cleanmap-data"
 bitbucket_branch = "main"
 bitbucket_root = "cleanmap-files"
-bitbucket_username = "YOUR_BITBUCKET_USERNAME"
-bitbucket_app_password = "YOUR_APP_PASSWORD"
+bitbucket_username = "you@yourcompany.com"
+bitbucket_app_password = "paste_api_token_here"
 ```
+
+For API tokens: **username = Atlassian email**, **bitbucket_app_password = the token** (the field name is historical).
 
 Skip Supabase keys when using Bitbucket.
 
@@ -129,8 +150,8 @@ You should see a **Sign in** page. After login:
 
 - Uploaded files are saved to Supabase under `{username}/uploads/`
 - Cleansed outputs go to `{username}/outputs/`
-- Use **Load from cloud** in step 1 to reopen a previous upload
-- Use **My cloud files** in the sidebar to download saved files
+- Workflow Steps 1–4 use **upload from your computer** only (no loading files from cloud in the workflow).
+- Sidebar **My cloud files** lists uploads and exports automatically (download or delete only — no separate cloud upload control).
 
 ---
 

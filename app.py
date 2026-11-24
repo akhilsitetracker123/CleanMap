@@ -60,9 +60,9 @@ from auth import (
 from cloud_storage import get_cloud_storage
 from cloud_ui import (
     handle_pending_cloud_delete,
-    load_workflow_file_from_cloud,
+    mirror_bytes_to_cloud_once,
+    mirror_workflow_file_to_cloud_once,
     render_cloud_storage_sidebar,
-    save_output_to_cloud,
     workflow_cloud_enabled,
 )
 from ui_theme import (
@@ -181,7 +181,8 @@ def main() -> None:
         local_path = ""
         if workflow_cloud_enabled(cloud, username):
             st.caption(
-                "Steps 1, 3, and 4 can **Load from cloud**, or use sidebar **Upload files to cloud**."
+                "Upload in the workflow from your computer only. Copies appear under "
+                "**My cloud files** in the sidebar."
             )
         else:
             use_local_path = st.checkbox(
@@ -210,29 +211,6 @@ def main() -> None:
     if use_local_path:
         st.caption("Using local file path — no browser upload.")
         main_file, file_key = _resolve_main_file(use_local_path, local_path, None)
-    elif workflow_cloud_enabled(cloud, username):
-        main_source = st.radio(
-            "Main file source",
-            ["Upload from computer", "Load from cloud"],
-            horizontal=True,
-            key="main_workflow_source",
-        )
-        if main_source == "Load from cloud":
-            main_file, file_key = load_workflow_file_from_cloud(
-                cloud,
-                username,
-                "uploads",
-                "main_cloud_file_select",
-            )
-        else:
-            uploaded_file = st.file_uploader(
-                "Step 1 — Upload main Excel file (.xlsx or .xls)",
-                type=["xlsx", "xls"],
-                key="main_file_uploader",
-            )
-            main_file, file_key = _resolve_main_file(False, "", uploaded_file)
-            if uploaded_file is not None and hasattr(uploaded_file, "seek"):
-                uploaded_file.seek(0)
     else:
         uploaded_file = st.file_uploader(
             "Step 1 — Upload main Excel file (.xlsx or .xls)",
@@ -242,6 +220,11 @@ def main() -> None:
         main_file, file_key = _resolve_main_file(False, "", uploaded_file)
         if uploaded_file is not None and hasattr(uploaded_file, "seek"):
             uploaded_file.seek(0)
+
+    if main_file and file_key:
+        mirror_workflow_file_to_cloud_once(
+            cloud, username, "uploads", file_key, main_file,
+        )
 
     if main_file:
         try:
@@ -349,33 +332,24 @@ def main() -> None:
                         f"Used for: {', '.join(columns)} · "
                         "File must contain **Name** and **Id** columns."
                     )
-                    lookup_source = "Upload from computer"
-                    if workflow_cloud_enabled(cloud, username):
-                        lookup_source = st.radio(
-                            "Reference source",
-                            ["Upload from computer", "Load from cloud"],
-                            horizontal=True,
-                            key=f"lookup_source_{object_name}",
-                        )
-
-                    lookup_file = None
-                    if lookup_source == "Load from cloud" and cloud:
-                        lookup_file, _lookup_key = load_workflow_file_from_cloud(
-                            cloud,
-                            username,
-                            "lookups",
-                            f"lookup_cloud_{object_name}",
-                            object_name=object_name,
-                        )
-                    else:
-                        lookup_file = st.file_uploader(
-                            f"{object_name} reference file",
-                            type=["xlsx", "xls"],
-                            key=f"lookup_upload_{object_name}",
-                        )
+                    lookup_file = st.file_uploader(
+                        f"{object_name} reference file",
+                        type=["xlsx", "xls"],
+                        key=f"lookup_upload_{object_name}",
+                    )
 
                     if lookup_file:
                         try:
+                            if hasattr(lookup_file, "seek"):
+                                lookup_file.seek(0)
+                            lookup_key = f"{object_name}:{_file_key(lookup_file)}"
+                            mirror_workflow_file_to_cloud_once(
+                                cloud,
+                                username,
+                                "lookups",
+                                lookup_key,
+                                lookup_file,
+                            )
                             if hasattr(lookup_file, "seek"):
                                 lookup_file.seek(0)
                             ref_df = read_lookup_reference_file(lookup_file)
@@ -425,32 +399,24 @@ def main() -> None:
                 with st.expander("View picklist fields in main file"):
                     st.write(", ".join(picklist_columns))
 
-            field_def_source = "Upload from computer"
-            if workflow_cloud_enabled(cloud, username):
-                field_def_source = st.radio(
-                    "Field definition source",
-                    ["Upload from computer", "Load from cloud"],
-                    horizontal=True,
-                    key="field_def_workflow_source",
-                )
-
-            field_def_file = None
-            if field_def_source == "Load from cloud" and cloud:
-                field_def_file, _field_cloud_key = load_workflow_file_from_cloud(
-                    cloud,
-                    username,
-                    "field_definitions",
-                    "field_definition_cloud_select",
-                )
-            else:
-                field_def_file = st.file_uploader(
-                    "Object field definition file",
-                    type=["xlsx", "xls"],
-                    key="field_definition_upload",
-                )
+            field_def_file = st.file_uploader(
+                "Object field definition file",
+                type=["xlsx", "xls"],
+                key="field_definition_upload",
+            )
 
             if field_def_file:
                 try:
+                    if hasattr(field_def_file, "seek"):
+                        field_def_file.seek(0)
+                    field_key = _file_key(field_def_file)
+                    mirror_workflow_file_to_cloud_once(
+                        cloud,
+                        username,
+                        "field_definitions",
+                        field_key,
+                        field_def_file,
+                    )
                     if hasattr(field_def_file, "seek"):
                         field_def_file.seek(0)
                     field_def = read_object_field_definition(field_def_file)
@@ -671,31 +637,23 @@ def main() -> None:
                         excel_bytes = buffer.getvalue()
                         file_name = "cleansed_output.xlsx"
 
-                    dl_col, cloud_col = st.columns([1, 1])
-                    with dl_col:
-                        st.download_button(
-                            "Download Cleansed Excel",
-                            data=excel_bytes,
-                            file_name=file_name,
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            use_container_width=True,
-                        )
-                    with cloud_col:
-                        if cloud and username != "local":
-                            if st.button(
-                                "Save to cloud",
-                                key="save_cleansed_to_cloud",
-                                use_container_width=True,
-                            ):
-                                cloud_path = save_output_to_cloud(
-                                    cloud, username, file_name, excel_bytes
-                                )
-                                if cloud_path:
-                                    st.session_state["cloud_user_message"] = (
-                                        "Cleansed file saved to cloud — open "
-                                        "**Upload files to cloud** in the sidebar to manage it."
-                                    )
-                                    st.rerun()
+                    output_sync_key = f"{file_key}:{file_name}"
+                    mirror_bytes_to_cloud_once(
+                        cloud,
+                        username,
+                        "outputs",
+                        output_sync_key,
+                        file_name,
+                        excel_bytes,
+                    )
+
+                    st.download_button(
+                        "Download Cleansed Excel",
+                        data=excel_bytes,
+                        file_name=file_name,
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True,
+                    )
             else:
                 st.info("Review field types, upload lookup files if needed, then click **Run validation**.")
 

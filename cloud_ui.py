@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import streamlit as st
@@ -9,7 +10,6 @@ import streamlit as st
 from cloud_storage import (
     CloudFile,
     CloudStorageBackend,
-    bytes_to_filelike,
     friendly_cloud_error,
     guess_mime,
     read_source_bytes,
@@ -33,65 +33,6 @@ def cloud_file_label(item: CloudFile) -> str:
     return f"{display_file_name(item.name)} · {CATEGORY_LABELS.get(item.category, item.category)}"
 
 
-def filter_lookup_cloud_files(files: list[CloudFile], object_name: str) -> list[CloudFile]:
-    """Prefer lookup files named for this object (e.g. Account_...)."""
-    needle = object_name.lower()
-    prefixed = [f for f in files if f.name.lower().startswith(f"{needle}_")]
-    if prefixed:
-        return prefixed
-    matched = [f for f in files if needle in f.name.lower()]
-    return matched or files
-
-
-def load_workflow_file_from_cloud(
-    cloud: CloudStorageBackend,
-    username: str,
-    category: str,
-    selectbox_key: str,
-    *,
-    object_name: str | None = None,
-    empty_message: str | None = None,
-) -> tuple[object | None, str | None]:
-    """
-    Show a cloud file dropdown and return (file-like source, cache key).
-    """
-    try:
-        files = cloud.list_files(username, category)
-    except Exception as exc:
-        st.error(friendly_cloud_error(exc))
-        return None, None
-
-    if object_name and category == "lookups":
-        files = filter_lookup_cloud_files(files, object_name)
-
-    if not files:
-        st.info(
-            empty_message
-            or "No matching files in cloud. Use sidebar **Upload files to cloud** first "
-            f"(category: {CATEGORY_LABELS.get(category, category)})."
-        )
-        return None, None
-
-    options = {cloud_file_label(item): item for item in files}
-    labels = list(options.keys())
-    selected_label = st.selectbox(
-        "Choose from cloud",
-        options=labels,
-        key=selectbox_key,
-    )
-    item = options[selected_label]
-    try:
-        data = cloud.download_bytes(item.path)
-    except Exception as exc:
-        st.error(friendly_cloud_error(exc))
-        return None, None
-
-    display_name = display_file_name(item.name)
-    source = bytes_to_filelike(data, display_name)
-    st.success(f"Loaded from cloud: **{display_name}**")
-    return source, f"cloud:{item.path}"
-
-
 def display_file_name(storage_name: str) -> str:
     """Strip the upload timestamp prefix from stored object names."""
     parts = storage_name.split("_", 2)
@@ -100,6 +41,78 @@ def display_file_name(storage_name: str) -> str:
     if "_" in storage_name:
         return storage_name.split("_", 1)[-1]
     return storage_name
+
+
+def _filename_from_source(source: Any, filename: str | None) -> str:
+    if filename:
+        return filename
+    if isinstance(source, Path):
+        return source.name
+    name = getattr(source, "name", None)
+    return str(name) if name else "upload.xlsx"
+
+
+def mirror_workflow_file_to_cloud_once(
+    cloud: CloudStorageBackend | None,
+    username: str,
+    category: str,
+    dedupe_key: str,
+    source: Any,
+    *,
+    filename: str | None = None,
+) -> None:
+    """Save a workflow upload to cloud once per dedupe_key (sidebar file list)."""
+    if cloud is None or username == "local" or not dedupe_key:
+        return
+    state_key = f"cloud_sync:{category}:{dedupe_key}"
+    if st.session_state.get(state_key):
+        return
+    fname = _filename_from_source(source, filename)
+    try:
+        if isinstance(source, Path):
+            data = source.read_bytes()
+        else:
+            data = read_source_bytes(source)
+        cloud.save_bytes(
+            username,
+            category,
+            fname,
+            data,
+            content_type=guess_mime(fname),
+        )
+        st.session_state[state_key] = True
+        st.session_state["cloud_last_action"] = "uploaded"
+        st.session_state.pop("cloud_last_error", None)
+    except Exception as exc:
+        st.session_state["cloud_last_error"] = friendly_cloud_error(exc)
+
+
+def mirror_bytes_to_cloud_once(
+    cloud: CloudStorageBackend | None,
+    username: str,
+    category: str,
+    dedupe_key: str,
+    filename: str,
+    data: bytes,
+) -> None:
+    if cloud is None or username == "local" or not dedupe_key or not data:
+        return
+    state_key = f"cloud_sync:{category}:{dedupe_key}"
+    if st.session_state.get(state_key):
+        return
+    try:
+        cloud.save_bytes(
+            username,
+            category,
+            filename,
+            data,
+            content_type=guess_mime(filename),
+        )
+        st.session_state[state_key] = True
+        st.session_state["cloud_last_action"] = "uploaded"
+        st.session_state.pop("cloud_last_error", None)
+    except Exception as exc:
+        st.session_state["cloud_last_error"] = friendly_cloud_error(exc)
 
 
 def handle_pending_cloud_delete(cloud: CloudStorageBackend | None) -> None:
@@ -119,46 +132,12 @@ def handle_pending_cloud_delete(cloud: CloudStorageBackend | None) -> None:
 
 
 def render_cloud_storage_sidebar(cloud: CloudStorageBackend, username: str) -> None:
-    """Sidebar panel: upload files to cloud, browse all files, download, delete."""
+    """Sidebar: list cloud files (workflow uploads are mirrored here automatically)."""
     st.divider()
-    if not st.toggle("Upload files to cloud", key="cloud_storage_open"):
-        return
-
+    st.markdown("##### My cloud files")
     st.caption(
-        "Store files here, or load saved files in Steps 1, 3, and 4 via **Load from cloud**."
+        "Files you upload in the workflow (and cleansed exports) are saved here automatically."
     )
-
-    category = st.selectbox(
-        "File type",
-        options=[key for key, _ in CLOUD_CATEGORIES],
-        format_func=lambda key: CATEGORY_LABELS.get(key, key),
-        key="cloud_upload_category",
-    )
-    upload_file = st.file_uploader(
-        "Choose file",
-        type=["xlsx", "xls"],
-        key="cloud_sidebar_uploader",
-    )
-
-    if st.button("Upload to cloud", type="primary", use_container_width=True):
-        if upload_file is None:
-            st.warning("Choose a file first.")
-        else:
-            try:
-                upload_file.seek(0)
-                data = read_source_bytes(upload_file)
-                cloud.save_bytes(
-                    username,
-                    category,
-                    upload_file.name,
-                    data,
-                    content_type=guess_mime(upload_file.name),
-                )
-                st.session_state["cloud_last_action"] = "uploaded"
-                st.session_state.pop("cloud_last_error", None)
-                st.rerun()
-            except Exception as exc:
-                st.error(friendly_cloud_error(exc))
 
     last_action = st.session_state.pop("cloud_last_action", None)
     if last_action == "uploaded":
@@ -169,7 +148,6 @@ def render_cloud_storage_sidebar(cloud: CloudStorageBackend, username: str) -> N
     if cloud_error:
         st.error(f"Cloud action failed: {cloud_error}")
 
-    st.markdown("##### All files in cloud")
     try:
         files = cloud.list_all_files(username)
     except Exception as exc:
@@ -218,16 +196,3 @@ def render_cloud_storage_sidebar(cloud: CloudStorageBackend, username: str) -> N
         st.divider()
 
 
-def save_output_to_cloud(
-    cloud: CloudStorageBackend | None,
-    username: str,
-    filename: str,
-    data: bytes,
-) -> str | None:
-    if cloud is None or username == "local":
-        return None
-    try:
-        return cloud.save_bytes(username, "outputs", filename, data)
-    except Exception as exc:
-        st.warning(f"Could not save output to cloud: {exc}")
-        return None

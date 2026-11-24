@@ -279,10 +279,26 @@ def friendly_cloud_error(exc: Exception) -> str:
     provider = cloud_provider()
 
     if provider == "bitbucket":
+        if "privilege scopes" in text or "required" in text and "granted" in text:
+            return (
+                "Bitbucket API token is missing **repository** scopes. Your token has admin/delete "
+                "scopes only; CleanMap needs **read:repository:bitbucket** and "
+                "**write:repository:bitbucket**. Create a new token at Atlassian → Security → "
+                "API tokens and select those two repository scopes (not admin:repository alone)."
+            )
         if "401" in text or "403" in text or "unauthorized" in text:
             return (
-                "Bitbucket rejected credentials. Check **bitbucket_username** and "
-                "**bitbucket_app_password** (App Password with Repository Write) in secrets."
+                "Bitbucket rejected credentials. Your **Bitbucket login password cannot be used** "
+                "here — use a **Bitbucket API token** (recommended) or legacy App Password.\n\n"
+                "- **bitbucket_username**: your Atlassian account **email** (e.g. the one on "
+                "Bitbucket → Personal settings → Email aliases).\n"
+                "- **bitbucket_app_password**: paste the **API token** only (create at "
+                "Bitbucket → Personal settings → API tokens). Scopes: "
+                "**read:repository:bitbucket** and **write:repository:bitbucket** (or "
+                "equivalent Repository read/write). Token must have access to workspace "
+                "**sitetraker** and repo **cleanmap-data**.\n\n"
+                "If you still use an App Password (deprecated): set **bitbucket_username** to your "
+                "Bitbucket **username** from Account settings — not your email."
             )
         if "404" in text:
             return (
