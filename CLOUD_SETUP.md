@@ -12,9 +12,47 @@ CleanMap uses:
 |-------|---------|------|
 | App hosting | [Streamlit Community Cloud](https://share.streamlit.io) | Free tier |
 | Login | Built-in (`streamlit-authenticator`) | Free |
-| File storage | [Supabase Storage](https://supabase.com) | Free tier (1 GB) |
+| File storage | **Bitbucket** repo *or* [Supabase Storage](https://supabase.com) | Per your org |
+
+Set `provider = "bitbucket"` or `provider = "supabase"` in secrets (see below).
 
 ---
+
+## Option A — Bitbucket cloud storage (recommended for Sitetraker)
+
+Use a **separate repository** for migration files (e.g. `cleanmap-data`), **not** the application source repo `cleanmap`. Each upload creates a Git commit under `cleanmap-files/{username}/...`.
+
+### A1. Create or pick a Bitbucket repo
+
+1. [Bitbucket](https://bitbucket.org) → workspace **sitetraker** (or yours).
+2. Create repo **`cleanmap-data`** (private).
+3. Default branch **`main`** is fine.
+
+### A2. Create an App Password
+
+1. [App passwords](https://bitbucket.org/account/settings/app-passwords/)
+2. Permissions: **Repositories: Read, Write**
+3. Copy the password once.
+
+### A3. Secrets (Streamlit Cloud or `.streamlit/secrets.toml`)
+
+```toml
+[cloud]
+enabled = true
+provider = "bitbucket"
+bitbucket_workspace = "sitetraker"
+bitbucket_repo = "cleanmap-data"
+bitbucket_branch = "main"
+bitbucket_root = "cleanmap-files"
+bitbucket_username = "YOUR_BITBUCKET_USERNAME"
+bitbucket_app_password = "YOUR_APP_PASSWORD"
+```
+
+Skip Supabase keys when using Bitbucket.
+
+---
+
+## Option B — Supabase cloud storage
 
 ## Step 1 — Create Supabase project (cloud storage)
 

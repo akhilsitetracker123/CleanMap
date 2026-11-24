@@ -1,11 +1,11 @@
-"""Supabase cloud storage for CleanMap uploads and outputs."""
+"""Cloud file storage for CleanMap (Supabase or Bitbucket)."""
 
 from __future__ import annotations
 
 import io
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal, Protocol
 
 import streamlit as st
 
@@ -22,6 +22,27 @@ class CloudFile:
     updated_at: str | None
 
 
+class CloudStorageBackend(Protocol):
+    bucket: str
+
+    def save_bytes(
+        self,
+        username: str,
+        category: str,
+        filename: str,
+        data: bytes,
+        content_type: str = ...,
+    ) -> str: ...
+
+    def list_files(self, username: str, category: str | None = None) -> list[CloudFile]: ...
+
+    def list_all_files(self, username: str) -> list[CloudFile]: ...
+
+    def delete_file(self, path: str) -> None: ...
+
+    def download_bytes(self, path: str) -> bytes: ...
+
+
 def normalize_supabase_url(url: str) -> str:
     """Normalize Project URL from Supabase dashboard (Settings → API)."""
     cleaned = str(url).strip().strip('"').strip("'").rstrip("/")
@@ -30,12 +51,33 @@ def normalize_supabase_url(url: str) -> str:
     return cleaned
 
 
+def cloud_provider() -> Literal["supabase", "bitbucket", "none"]:
+    try:
+        cloud = st.secrets.get("cloud", {})
+        if not cloud.get("enabled"):
+            return "none"
+        provider = str(cloud.get("provider", "supabase")).strip().lower()
+        if provider == "bitbucket":
+            return "bitbucket"
+        return "supabase"
+    except Exception:
+        return "none"
+
+
 def cloud_is_configured() -> bool:
     try:
         cloud = st.secrets.get("cloud", {})
+        if not cloud.get("enabled"):
+            return False
+        if cloud_provider() == "bitbucket":
+            return bool(
+                cloud.get("bitbucket_workspace")
+                and cloud.get("bitbucket_repo")
+                and cloud.get("bitbucket_username")
+                and cloud.get("bitbucket_app_password")
+            )
         return bool(
-            cloud.get("enabled")
-            and cloud.get("supabase_url")
+            cloud.get("supabase_url")
             and cloud.get("supabase_key")
             and cloud.get("bucket")
         )
@@ -46,27 +88,66 @@ def cloud_is_configured() -> bool:
 _CLOUD_STORAGE_KEY = "cleanmap_cloud_storage"
 
 
-def get_cloud_storage() -> "CloudStorage | None":
+def _cloud_config_fingerprint(cloud: dict) -> str:
+    provider = cloud_provider()
+    if provider == "bitbucket":
+        return "|".join(
+            [
+                "bitbucket",
+                str(cloud.get("bitbucket_workspace")),
+                str(cloud.get("bitbucket_repo")),
+                str(cloud.get("bitbucket_branch", "main")),
+                str(cloud.get("bitbucket_root", "cleanmap-files")),
+            ]
+        )
+    return "|".join(
+        [
+            "supabase",
+            str(cloud.get("supabase_url")),
+            str(cloud.get("bucket")),
+        ]
+    )
+
+
+def get_cloud_storage() -> CloudStorageBackend | None:
     if not cloud_is_configured():
         return None
 
+    cloud = st.secrets["cloud"]
+    fingerprint = _cloud_config_fingerprint(cloud)
     cached = st.session_state.get(_CLOUD_STORAGE_KEY)
-    # Drop instances created before new methods were added (reload/dev deploy cache).
-    if cached is not None and not hasattr(cached, "list_all_files"):
+    cached_fp = st.session_state.get(f"{_CLOUD_STORAGE_KEY}_fp")
+
+    if cached is not None and (
+        not hasattr(cached, "list_all_files") or cached_fp != fingerprint
+    ):
         del st.session_state[_CLOUD_STORAGE_KEY]
         cached = None
 
     if cached is None:
-        cloud = st.secrets["cloud"]
-        st.session_state[_CLOUD_STORAGE_KEY] = CloudStorage(
-            url=normalize_supabase_url(str(cloud["supabase_url"])),
-            key=str(cloud["supabase_key"]).strip(),
-            bucket=str(cloud["bucket"]).strip(),
-        )
+        if cloud_provider() == "bitbucket":
+            from bitbucket_storage import BitbucketCloudStorage
+
+            backend = BitbucketCloudStorage(
+                workspace=str(cloud["bitbucket_workspace"]),
+                repo=str(cloud["bitbucket_repo"]),
+                branch=str(cloud.get("bitbucket_branch", "main")),
+                root=str(cloud.get("bitbucket_root", "cleanmap-files")),
+                api_username=str(cloud["bitbucket_username"]),
+                app_password=str(cloud["bitbucket_app_password"]),
+            )
+        else:
+            backend = SupabaseCloudStorage(
+                url=normalize_supabase_url(str(cloud["supabase_url"])),
+                key=str(cloud["supabase_key"]).strip(),
+                bucket=str(cloud["bucket"]).strip(),
+            )
+        st.session_state[_CLOUD_STORAGE_KEY] = backend
+        st.session_state[f"{_CLOUD_STORAGE_KEY}_fp"] = fingerprint
     return st.session_state[_CLOUD_STORAGE_KEY]
 
 
-class CloudStorage:
+class SupabaseCloudStorage:
     def __init__(self, url: str, key: str, bucket: str) -> None:
         from supabase import create_client
 
@@ -150,6 +231,10 @@ class CloudStorage:
         return str(result)
 
 
+# Backward-compatible alias
+CloudStorage = SupabaseCloudStorage
+
+
 def read_source_bytes(source: Any) -> bytes:
     if isinstance(source, bytes):
         return source
@@ -188,9 +273,26 @@ def _coerce_int(value: Any) -> int | None:
 
 
 def friendly_cloud_error(exc: Exception) -> str:
-    """User-safe message for Supabase / network failures (no secrets)."""
+    """User-safe message for cloud storage failures (no secrets)."""
     name = type(exc).__name__
     text = str(exc).lower()
+    provider = cloud_provider()
+
+    if provider == "bitbucket":
+        if "401" in text or "403" in text or "unauthorized" in text:
+            return (
+                "Bitbucket rejected credentials. Check **bitbucket_username** and "
+                "**bitbucket_app_password** (App Password with Repository Write) in secrets."
+            )
+        if "404" in text:
+            return (
+                "Bitbucket repository or path not found. Verify **bitbucket_workspace**, "
+                "**bitbucket_repo**, and **bitbucket_branch** in secrets."
+            )
+        if "connecterror" in name.lower() or "connect" in text:
+            return "Could not connect to Bitbucket API (api.bitbucket.org)."
+        return f"Bitbucket storage error ({name}). See CLOUD_SETUP.md."
+
     if "connecterror" in name.lower() or "connect" in text or "nodename" in text:
         return (
             "Could not connect to Supabase. Check that **supabase_url** in Streamlit "
@@ -207,4 +309,4 @@ def friendly_cloud_error(exc: Exception) -> str:
             "Storage bucket not found. Create a private bucket named **cleanmap-files** "
             "(or match the **bucket** value in secrets)."
         )
-    return f"Cloud storage error ({name}). Check Supabase URL, service key, and bucket name."
+    return f"Cloud storage error ({name}). Check cloud provider settings in secrets."

@@ -8,7 +8,7 @@ import streamlit as st
 
 from cloud_storage import (
     CloudFile,
-    CloudStorage,
+    CloudStorageBackend,
     bytes_to_filelike,
     friendly_cloud_error,
     guess_mime,
@@ -25,7 +25,7 @@ CLOUD_CATEGORIES = (
 CATEGORY_LABELS = dict(CLOUD_CATEGORIES)
 
 
-def workflow_cloud_enabled(cloud: CloudStorage | None, username: str) -> bool:
+def workflow_cloud_enabled(cloud: CloudStorageBackend | None, username: str) -> bool:
     return cloud is not None and username != "local"
 
 
@@ -44,7 +44,7 @@ def filter_lookup_cloud_files(files: list[CloudFile], object_name: str) -> list[
 
 
 def load_workflow_file_from_cloud(
-    cloud: CloudStorage,
+    cloud: CloudStorageBackend,
     username: str,
     category: str,
     selectbox_key: str,
@@ -102,7 +102,7 @@ def display_file_name(storage_name: str) -> str:
     return storage_name
 
 
-def handle_pending_cloud_delete(cloud: CloudStorage | None) -> None:
+def handle_pending_cloud_delete(cloud: CloudStorageBackend | None) -> None:
     """Delete a cloud file after the user clicks Delete (button callback order)."""
     if cloud is None:
         st.session_state.pop("cloud_pending_delete_path", None)
@@ -118,7 +118,7 @@ def handle_pending_cloud_delete(cloud: CloudStorage | None) -> None:
     st.rerun()
 
 
-def render_cloud_storage_sidebar(cloud: CloudStorage, username: str) -> None:
+def render_cloud_storage_sidebar(cloud: CloudStorageBackend, username: str) -> None:
     """Sidebar panel: upload files to cloud, browse all files, download, delete."""
     st.divider()
     if not st.toggle("Upload files to cloud", key="cloud_storage_open"):
@@ -219,7 +219,7 @@ def render_cloud_storage_sidebar(cloud: CloudStorage, username: str) -> None:
 
 
 def save_output_to_cloud(
-    cloud: CloudStorage | None,
+    cloud: CloudStorageBackend | None,
     username: str,
     filename: str,
     data: bytes,
