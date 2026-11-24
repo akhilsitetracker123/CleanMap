@@ -51,6 +51,26 @@ def normalize_supabase_url(url: str) -> str:
     return cleaned
 
 
+def cloud_delete_admin_usernames() -> set[str]:
+    """Usernames that may remove files from the cloud bucket (default: admin)."""
+    try:
+        cloud = st.secrets.get("cloud", {})
+        admins = cloud.get("delete_admins")
+        if isinstance(admins, (list, tuple)):
+            names = {str(a).strip().lower() for a in admins if str(a).strip()}
+            if names:
+                return names
+        if isinstance(admins, str) and admins.strip():
+            return {admins.strip().lower()}
+    except Exception:
+        pass
+    return {"admin"}
+
+
+def user_can_delete_cloud_files(username: str) -> bool:
+    return username.strip().lower() in cloud_delete_admin_usernames()
+
+
 def _bitbucket_secrets_ready(cloud: dict) -> bool:
     return bool(
         cloud.get("bitbucket_workspace")
@@ -232,6 +252,45 @@ class SupabaseCloudStorage:
         for category in ("uploads", "lookups", "field_definitions", "outputs"):
             files.extend(self.list_files(username, category))
         files.sort(key=lambda item: item.name, reverse=True)
+        return files
+
+    def list_entire_bucket(self) -> list[CloudFile]:
+        files: list[CloudFile] = []
+        top = self._client.storage.from_(self.bucket).list("")
+        for entry in top or []:
+            if not isinstance(entry, dict):
+                continue
+            user_folder = str(entry.get("name", "")).rstrip("/")
+            if not user_folder or user_folder == "/":
+                continue
+            files.extend(self._list_user_tree(user_folder))
+        files.sort(key=lambda item: item.name, reverse=True)
+        return files
+
+    def _list_user_tree(self, user_folder: str) -> list[CloudFile]:
+        files: list[CloudFile] = []
+        for category in ("uploads", "lookups", "field_definitions", "outputs"):
+            prefix = f"{user_folder}/{category}"
+            entries = self._client.storage.from_(self.bucket).list(prefix)
+            for entry in entries or []:
+                if not isinstance(entry, dict):
+                    continue
+                name = str(entry.get("name", ""))
+                if not name or name.endswith("/"):
+                    continue
+                metadata = entry.get("metadata") or {}
+                path = f"{prefix}/{name}"
+                files.append(
+                    CloudFile(
+                        name=name,
+                        path=path,
+                        category=category,
+                        size=_coerce_int(metadata.get("size")),
+                        updated_at=str(
+                            metadata.get("lastModified") or entry.get("updated_at") or ""
+                        ),
+                    )
+                )
         return files
 
     def delete_file(self, path: str) -> None:

@@ -13,6 +13,7 @@ from cloud_storage import (
     friendly_cloud_error,
     guess_mime,
     read_source_bytes,
+    user_can_delete_cloud_files,
 )
 
 CLOUD_CATEGORIES = (
@@ -115,9 +116,15 @@ def mirror_bytes_to_cloud_once(
         st.session_state["cloud_last_error"] = friendly_cloud_error(exc)
 
 
-def handle_pending_cloud_delete(cloud: CloudStorageBackend | None) -> None:
-    """Delete a cloud file after the user clicks Delete (button callback order)."""
+def handle_pending_cloud_delete(
+    cloud: CloudStorageBackend | None,
+    username: str,
+) -> None:
+    """Delete a cloud file after an admin clicks Delete (button callback order)."""
     if cloud is None:
+        st.session_state.pop("cloud_pending_delete_path", None)
+        return
+    if not user_can_delete_cloud_files(username):
         st.session_state.pop("cloud_pending_delete_path", None)
         return
     path = st.session_state.pop("cloud_pending_delete_path", None)
@@ -131,13 +138,31 @@ def handle_pending_cloud_delete(cloud: CloudStorageBackend | None) -> None:
     st.rerun()
 
 
+def _list_sidebar_files(cloud: CloudStorageBackend, username: str) -> list[CloudFile]:
+    if user_can_delete_cloud_files(username) and hasattr(cloud, "list_entire_bucket"):
+        return cloud.list_entire_bucket()
+    return cloud.list_all_files(username)
+
+
+def _cloud_path_owner(path: str) -> str | None:
+    parts = path.replace("\\", "/").split("/")
+    if not parts:
+        return None
+    if parts[0] == "cleanmap-files" and len(parts) >= 2:
+        return parts[1]
+    return parts[0]
+
+
 def render_cloud_storage_sidebar(cloud: CloudStorageBackend, username: str) -> None:
-    """Sidebar: list cloud files (workflow uploads are mirrored here automatically)."""
+    """Sidebar bucket: workflow uploads from computer are stored until an admin removes them."""
     st.divider()
-    st.markdown("##### My cloud files")
+    st.markdown("##### File bucket")
     st.caption(
-        "Files you upload in the workflow (and cleansed exports) are saved here automatically."
+        "Upload **from your computer** in the workflow only — no load-from-cloud. "
+        "Each upload is saved here until an **admin** removes it."
     )
+    if not user_can_delete_cloud_files(username):
+        st.caption("You can download your files. Only admins can delete from the bucket.")
 
     last_action = st.session_state.pop("cloud_last_action", None)
     if last_action == "uploaded":
@@ -149,7 +174,7 @@ def render_cloud_storage_sidebar(cloud: CloudStorageBackend, username: str) -> N
         st.error(f"Cloud action failed: {cloud_error}")
 
     try:
-        files = cloud.list_all_files(username)
+        files = _list_sidebar_files(cloud, username)
     except Exception as exc:
         st.error(friendly_cloud_error(exc))
         st.caption(
@@ -162,13 +187,22 @@ def render_cloud_storage_sidebar(cloud: CloudStorageBackend, username: str) -> N
         st.caption("No files in cloud yet.")
         return
 
+    is_admin = user_can_delete_cloud_files(username)
     for item in files:
         label = CATEGORY_LABELS.get(item.category, item.category)
         display_name = display_file_name(item.name)
         st.markdown(f"**{display_name}**")
-        st.caption(f"{label} · {item.name}")
+        owner = _cloud_path_owner(item.path)
+        meta = f"{label} · {item.name}"
+        if is_admin and owner:
+            meta = f"User **{owner}** · {meta}"
+        st.caption(meta)
 
-        action_cols = st.columns([1, 1])
+        if is_admin:
+            action_cols = st.columns([1, 1])
+        else:
+            action_cols = st.columns([1])
+
         with action_cols[0]:
             try:
                 data = cloud.download_bytes(item.path)
@@ -183,15 +217,17 @@ def render_cloud_storage_sidebar(cloud: CloudStorageBackend, username: str) -> N
             except Exception as exc:
                 st.caption(f"Error: {exc}")
 
-        with action_cols[1]:
-            if st.button(
-                "Delete",
-                key=f"cloud_del_{item.path}",
-                use_container_width=True,
-                type="secondary",
-            ):
-                st.session_state["cloud_pending_delete_path"] = item.path
-                st.rerun()
+        if is_admin and len(action_cols) > 1:
+            with action_cols[1]:
+                if st.button(
+                    "Delete",
+                    key=f"cloud_del_{item.path}",
+                    use_container_width=True,
+                    type="secondary",
+                    help="Admin only — removes file from the bucket",
+                ):
+                    st.session_state["cloud_pending_delete_path"] = item.path
+                    st.rerun()
 
         st.divider()
 

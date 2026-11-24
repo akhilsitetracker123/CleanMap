@@ -150,8 +150,9 @@ You should see a **Sign in** page. After login:
 
 - Uploaded files are saved to Supabase under `{username}/uploads/`
 - Cleansed outputs go to `{username}/outputs/`
-- Workflow Steps 1–4 use **upload from your computer** only (no loading files from cloud in the workflow).
-- Sidebar **My cloud files** lists uploads and exports automatically (download or delete only — no separate cloud upload control).
+- Workflow Steps 1–4: **upload from your computer** only (never load from cloud).
+- Each upload is copied to the sidebar **File bucket** and kept until an admin deletes it (`delete_admins` in secrets, default `admin`).
+- Non-admin users can download their files; only admins see **Delete** and (for admins) all users’ files in the bucket.
 
 ---
 

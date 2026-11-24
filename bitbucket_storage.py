@@ -137,6 +137,50 @@ class BitbucketCloudStorage:
     def list_all_files(self, username: str) -> list[CloudFile]:
         return self.list_files(username, category=None)
 
+    def list_entire_bucket(self) -> list[CloudFile]:
+        """List all users' files under the storage root (for admin bucket view)."""
+        encoded_root = quote(self.root, safe="")
+        url = (
+            f"{self._repo_slug_url()}/src/{quote(self.branch, safe='')}/{encoded_root}/"
+            f"?format=flat&max_depth=4"
+        )
+        try:
+            response = self._request("GET", url)
+        except RuntimeError as exc:
+            if "404" in str(exc):
+                return []
+            raise
+        payload = response.json()
+        files: list[CloudFile] = []
+        root_prefix = f"{self.root}/"
+        for entry in payload.get("values") or []:
+            if entry.get("type") != "commit_file":
+                continue
+            full_path = str(entry.get("path", ""))
+            if not full_path.startswith(root_prefix):
+                continue
+            rel = full_path[len(root_prefix) :]
+            parts = rel.split("/")
+            if len(parts) < 3:
+                continue
+            category = parts[1]
+            if category not in CLOUD_CATEGORIES:
+                continue
+            name = full_path.rsplit("/", 1)[-1]
+            if not name:
+                continue
+            files.append(
+                CloudFile(
+                    name=name,
+                    path=full_path,
+                    category=category,
+                    size=_coerce_int(entry.get("size")),
+                    updated_at=None,
+                )
+            )
+        files.sort(key=lambda item: item.name, reverse=True)
+        return files
+
     def delete_file(self, path: str) -> None:
         url = f"{self._repo_slug_url()}/src"
         # Empty file field deletes the path in Bitbucket's multipart commit API.

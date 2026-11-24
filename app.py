@@ -143,7 +143,7 @@ def main() -> None:
 
     cloud = get_cloud_storage()
     if cloud and username != "local":
-        handle_pending_cloud_delete(cloud)
+        handle_pending_cloud_delete(cloud, username)
 
     if auth_is_configured() and username != "local":
         _header_spacer, _logout_col = st.columns([6, 1])
@@ -181,8 +181,8 @@ def main() -> None:
         local_path = ""
         if workflow_cloud_enabled(cloud, username):
             st.caption(
-                "Upload in the workflow from your computer only. Copies appear under "
-                "**My cloud files** in the sidebar."
+                "Use **Upload from your computer** in each step. Files are stored in the "
+                "sidebar **File bucket** until an admin removes them."
             )
         else:
             use_local_path = st.checkbox(
@@ -213,7 +213,7 @@ def main() -> None:
         main_file, file_key = _resolve_main_file(use_local_path, local_path, None)
     else:
         uploaded_file = st.file_uploader(
-            "Step 1 — Upload main Excel file (.xlsx or .xls)",
+            "Step 1 — Upload from your computer (.xlsx or .xls)",
             type=["xlsx", "xls"],
             key="main_file_uploader",
         )
