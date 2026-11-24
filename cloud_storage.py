@@ -51,15 +51,39 @@ def normalize_supabase_url(url: str) -> str:
     return cleaned
 
 
+def _bitbucket_secrets_ready(cloud: dict) -> bool:
+    return bool(
+        cloud.get("bitbucket_workspace")
+        and cloud.get("bitbucket_repo")
+        and cloud.get("bitbucket_username")
+        and cloud.get("bitbucket_app_password")
+    )
+
+
+def _supabase_secrets_ready(cloud: dict) -> bool:
+    return bool(
+        cloud.get("supabase_url")
+        and cloud.get("supabase_key")
+        and cloud.get("bucket")
+    )
+
+
 def cloud_provider() -> Literal["supabase", "bitbucket", "none"]:
     try:
         cloud = st.secrets.get("cloud", {})
         if not cloud.get("enabled"):
             return "none"
-        provider = str(cloud.get("provider", "supabase")).strip().lower()
-        if provider == "bitbucket":
+        explicit = str(cloud.get("provider", "")).strip().lower()
+        if explicit == "bitbucket":
             return "bitbucket"
-        return "supabase"
+        if explicit == "supabase":
+            return "supabase"
+        # No provider set: prefer Bitbucket when those secrets exist (avoids stale Supabase defaults).
+        if _bitbucket_secrets_ready(cloud):
+            return "bitbucket"
+        if _supabase_secrets_ready(cloud):
+            return "supabase"
+        return "none"
     except Exception:
         return "none"
 
@@ -69,18 +93,12 @@ def cloud_is_configured() -> bool:
         cloud = st.secrets.get("cloud", {})
         if not cloud.get("enabled"):
             return False
-        if cloud_provider() == "bitbucket":
-            return bool(
-                cloud.get("bitbucket_workspace")
-                and cloud.get("bitbucket_repo")
-                and cloud.get("bitbucket_username")
-                and cloud.get("bitbucket_app_password")
-            )
-        return bool(
-            cloud.get("supabase_url")
-            and cloud.get("supabase_key")
-            and cloud.get("bucket")
-        )
+        provider = cloud_provider()
+        if provider == "bitbucket":
+            return _bitbucket_secrets_ready(cloud)
+        if provider == "supabase":
+            return _supabase_secrets_ready(cloud)
+        return False
     except Exception:
         return False
 
@@ -313,7 +331,10 @@ def friendly_cloud_error(exc: Exception) -> str:
         return (
             "Could not connect to Supabase. Check that **supabase_url** in Streamlit "
             "Cloud secrets matches your active project (Supabase → Settings → API → "
-            "Project URL). Paused or deleted projects will fail with this error."
+            "Project URL). Paused or deleted projects will fail with this error.\n\n"
+            "If you use **Bitbucket** for file storage instead, set `provider = \"bitbucket\"` "
+            "under `[cloud]` and **remove** `supabase_url`, `supabase_key`, and `bucket` from "
+            "secrets, then reboot the app."
         )
     if "401" in text or "unauthorized" in text or "invalid" in text and "api" in text:
         return (
