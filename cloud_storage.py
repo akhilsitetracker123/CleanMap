@@ -95,14 +95,13 @@ def cloud_provider() -> Literal["supabase", "bitbucket", "none"]:
             return "none"
         explicit = str(cloud.get("provider", "")).strip().lower()
         if explicit == "bitbucket":
-            return "bitbucket"
+            return "bitbucket" if _bitbucket_secrets_ready(cloud) else "none"
         if explicit == "supabase":
-            return "supabase"
-        # No provider set: prefer Bitbucket when those secrets exist (avoids stale Supabase defaults).
+            return "supabase" if _supabase_secrets_ready(cloud) else "none"
+        # No provider set: use Bitbucket when configured. Leftover supabase_* keys are ignored
+        # unless provider = "supabase" explicitly (avoids dead Supabase URLs on Streamlit Cloud).
         if _bitbucket_secrets_ready(cloud):
             return "bitbucket"
-        if _supabase_secrets_ready(cloud):
-            return "supabase"
         return "none"
     except Exception:
         return "none"
@@ -147,8 +146,18 @@ def _cloud_config_fingerprint(cloud: dict) -> str:
     )
 
 
+def cloud_storage_requested() -> bool:
+    """True when [cloud] enabled=true in secrets (even if credentials are incomplete)."""
+    try:
+        return bool(st.secrets.get("cloud", {}).get("enabled"))
+    except Exception:
+        return False
+
+
 def get_cloud_storage() -> CloudStorageBackend | None:
     if not cloud_is_configured():
+        st.session_state.pop(_CLOUD_STORAGE_KEY, None)
+        st.session_state.pop(f"{_CLOUD_STORAGE_KEY}_fp", None)
         return None
 
     cloud = st.secrets["cloud"]

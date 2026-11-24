@@ -153,6 +153,16 @@ def _cloud_path_owner(path: str) -> str | None:
     return parts[0]
 
 
+def render_cloud_storage_setup_hint() -> None:
+    st.divider()
+    st.markdown("##### File bucket")
+    st.info(
+        "Finish cloud setup in Streamlit **Secrets**: `provider = \"bitbucket\"`, "
+        "Bitbucket workspace/repo/username/API token (with repository read+write scopes). "
+        "Delete old `supabase_url`, `supabase_key`, and `bucket` entries, then **Reboot** the app."
+    )
+
+
 def render_cloud_storage_sidebar(cloud: CloudStorageBackend, username: str) -> None:
     """Sidebar bucket: workflow uploads from computer are stored until an admin removes them."""
     st.divider()

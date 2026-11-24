@@ -57,11 +57,12 @@ from auth import (
     render_login_page,
     render_logout_button,
 )
-from cloud_storage import get_cloud_storage
+from cloud_storage import cloud_storage_requested, get_cloud_storage
 from cloud_ui import (
     handle_pending_cloud_delete,
     mirror_bytes_to_cloud_once,
     mirror_workflow_file_to_cloud_once,
+    render_cloud_storage_setup_hint,
     render_cloud_storage_sidebar,
     workflow_cloud_enabled,
 )
@@ -162,8 +163,11 @@ def main() -> None:
         if username != "local":
             st.caption(f"Signed in as **{username}**")
         render_logout_button()
-        if cloud and username != "local":
-            render_cloud_storage_sidebar(cloud, username)
+        if username != "local":
+            if cloud:
+                render_cloud_storage_sidebar(cloud, username)
+            elif cloud_storage_requested():
+                render_cloud_storage_setup_hint()
         st.markdown("##### Processing options")
         apply_cleansing = st.checkbox(
             "Auto-cleanse (trim whitespace, normalize blanks)",
