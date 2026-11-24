@@ -71,12 +71,29 @@ def user_can_delete_cloud_files(username: str) -> bool:
     return username.strip().lower() in cloud_delete_admin_usernames()
 
 
+def _bitbucket_placeholder_token(value: str) -> bool:
+    lowered = value.strip().lower()
+    if len(lowered) < 16:
+        return True
+    markers = (
+        "paste_",
+        "paste ",
+        "your_",
+        "replace",
+        "pasted_bitbucket",
+        "api_token_here",
+    )
+    return any(marker in lowered for marker in markers)
+
+
 def _bitbucket_secrets_ready(cloud: dict) -> bool:
+    token = str(cloud.get("bitbucket_app_password", "")).strip()
     return bool(
         cloud.get("bitbucket_workspace")
         and cloud.get("bitbucket_repo")
         and cloud.get("bitbucket_username")
-        and cloud.get("bitbucket_app_password")
+        and token
+        and not _bitbucket_placeholder_token(token)
     )
 
 
@@ -374,17 +391,12 @@ def friendly_cloud_error(exc: Exception) -> str:
             )
         if "401" in text or "403" in text or "unauthorized" in text:
             return (
-                "Bitbucket rejected credentials. Your **Bitbucket login password cannot be used** "
-                "here — use a **Bitbucket API token** (recommended) or legacy App Password.\n\n"
-                "- **bitbucket_username**: your Atlassian account **email** (e.g. the one on "
-                "Bitbucket → Personal settings → Email aliases).\n"
-                "- **bitbucket_app_password**: paste the **API token** only (create at "
-                "Bitbucket → Personal settings → API tokens). Scopes: "
-                "**read:repository:bitbucket** and **write:repository:bitbucket** (or "
-                "equivalent Repository read/write). Token must have access to workspace "
-                "**sitetraker** and repo **cleanmap-data**.\n\n"
-                "If you still use an App Password (deprecated): set **bitbucket_username** to your "
-                "Bitbucket **username** from Account settings — not your email."
+                "Bitbucket auth failed. In Streamlit **Secrets** use your **Atlassian email** as "
+                "`bitbucket_username` and a **Bitbucket API token** (not your login password) as "
+                "`bitbucket_app_password`. Wrap the token in **double quotes** in TOML (tokens end "
+                "with `=`). Create the token at id.atlassian.com → Security → API tokens → Bitbucket "
+                "with **read:repository:bitbucket** and **write:repository:bitbucket** for repo "
+                "**sitetraker/cleanmap-data**, then **Reboot** the app."
             )
         if "404" in text:
             return (

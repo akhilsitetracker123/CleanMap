@@ -34,12 +34,16 @@ class BitbucketCloudStorage:
         self.repo = repo.strip()
         self.branch = branch.strip() or "main"
         self.root = root.strip().strip("/") or "cleanmap-files"
-        self.api_username = api_username.strip()
-        self.app_password = app_password.strip()
+        self.api_username = api_username.strip().strip('"').strip("'")
+        self.app_password = app_password.strip().strip('"').strip("'")
         self.bucket = self.repo  # for error messages that mention bucket
 
     def _auth(self) -> tuple[str, str]:
         return self.api_username, self.app_password
+
+    @staticmethod
+    def _atlassian_api_token(token: str) -> bool:
+        return token.startswith("ATATT") or token.startswith("ATCTT")
 
     def _repo_slug_url(self) -> str:
         return f"{API_BASE}/repositories/{self.workspace}/{self.repo}"
@@ -57,8 +61,28 @@ class BitbucketCloudStorage:
         timeout: float = 60.0,
         **kwargs: Any,
     ) -> httpx.Response:
-        with httpx.Client(timeout=timeout) as client:
-            response = client.request(method, url, auth=self._auth(), **kwargs)
+        headers = dict(kwargs.pop("headers", None) or {})
+
+        def call(*, bearer: bool) -> httpx.Response:
+            with httpx.Client(timeout=timeout) as client:
+                if bearer:
+                    merged = {
+                        **headers,
+                        "Authorization": f"Bearer {self.app_password}",
+                    }
+                    return client.request(method, url, headers=merged, **kwargs)
+                return client.request(method, url, auth=self._auth(), headers=headers, **kwargs)
+
+        # Atlassian API tokens: Basic (email + token) or Bearer both work; retry on auth failure.
+        use_bearer_first = self._atlassian_api_token(self.app_password)
+        response = call(bearer=use_bearer_first)
+        if response.status_code in (401, 403) and self.app_password:
+            alt = not use_bearer_first
+            retry = call(bearer=alt)
+            if retry.status_code < response.status_code or (
+                response.status_code >= 400 and retry.status_code < 400
+            ):
+                response = retry
         if response.status_code >= 400:
             text = response.text[:500]
             raise RuntimeError(f"Bitbucket API {response.status_code}: {text}")

@@ -158,8 +158,9 @@ def render_cloud_storage_setup_hint() -> None:
     st.markdown("##### File bucket")
     st.info(
         "Finish cloud setup in Streamlit **Secrets**: `provider = \"bitbucket\"`, "
-        "Bitbucket workspace/repo/username/API token (with repository read+write scopes). "
-        "Delete old `supabase_url`, `supabase_key`, and `bucket` entries, then **Reboot** the app."
+        "Atlassian **email** as `bitbucket_username`, and API token in "
+        "**quoted** `bitbucket_app_password = \"ATATT...\"` (read+write **repository** scopes). "
+        "Remove `supabase_*` keys, save, **Reboot**."
     )
 
 
