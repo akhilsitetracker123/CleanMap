@@ -60,8 +60,10 @@ from auth import (
 from cloud_storage import get_cloud_storage
 from cloud_ui import (
     handle_pending_cloud_delete,
+    load_workflow_file_from_cloud,
     render_cloud_storage_sidebar,
     save_output_to_cloud,
+    workflow_cloud_enabled,
 )
 from ui_theme import (
     APP_NAME,
@@ -177,8 +179,10 @@ def main() -> None:
         st.markdown("##### Large files")
         use_local_path = False
         local_path = ""
-        if cloud and username != "local":
-            st.caption("Use **Upload files to cloud** in the sidebar to store or manage files.")
+        if workflow_cloud_enabled(cloud, username):
+            st.caption(
+                "Steps 1, 3, and 4 can **Load from cloud**, or use sidebar **Upload files to cloud**."
+            )
         else:
             use_local_path = st.checkbox(
                 "Load from local file path",
@@ -206,6 +210,29 @@ def main() -> None:
     if use_local_path:
         st.caption("Using local file path — no browser upload.")
         main_file, file_key = _resolve_main_file(use_local_path, local_path, None)
+    elif workflow_cloud_enabled(cloud, username):
+        main_source = st.radio(
+            "Main file source",
+            ["Upload from computer", "Load from cloud"],
+            horizontal=True,
+            key="main_workflow_source",
+        )
+        if main_source == "Load from cloud":
+            main_file, file_key = load_workflow_file_from_cloud(
+                cloud,
+                username,
+                "uploads",
+                "main_cloud_file_select",
+            )
+        else:
+            uploaded_file = st.file_uploader(
+                "Step 1 — Upload main Excel file (.xlsx or .xls)",
+                type=["xlsx", "xls"],
+                key="main_file_uploader",
+            )
+            main_file, file_key = _resolve_main_file(False, "", uploaded_file)
+            if uploaded_file is not None and hasattr(uploaded_file, "seek"):
+                uploaded_file.seek(0)
     else:
         uploaded_file = st.file_uploader(
             "Step 1 — Upload main Excel file (.xlsx or .xls)",
@@ -322,15 +349,36 @@ def main() -> None:
                         f"Used for: {', '.join(columns)} · "
                         "File must contain **Name** and **Id** columns."
                     )
-                    lookup_upload = st.file_uploader(
-                        f"{object_name} reference file",
-                        type=["xlsx", "xls"],
-                        key=f"lookup_upload_{object_name}",
-                    )
-                    if lookup_upload:
+                    lookup_source = "Upload from computer"
+                    if workflow_cloud_enabled(cloud, username):
+                        lookup_source = st.radio(
+                            "Reference source",
+                            ["Upload from computer", "Load from cloud"],
+                            horizontal=True,
+                            key=f"lookup_source_{object_name}",
+                        )
+
+                    lookup_file = None
+                    if lookup_source == "Load from cloud" and cloud:
+                        lookup_file, _lookup_key = load_workflow_file_from_cloud(
+                            cloud,
+                            username,
+                            "lookups",
+                            f"lookup_cloud_{object_name}",
+                            object_name=object_name,
+                        )
+                    else:
+                        lookup_file = st.file_uploader(
+                            f"{object_name} reference file",
+                            type=["xlsx", "xls"],
+                            key=f"lookup_upload_{object_name}",
+                        )
+
+                    if lookup_file:
                         try:
-                            lookup_upload.seek(0)
-                            ref_df = read_lookup_reference_file(lookup_upload)
+                            if hasattr(lookup_file, "seek"):
+                                lookup_file.seek(0)
+                            ref_df = read_lookup_reference_file(lookup_file)
                             lookup_tables[object_name] = ref_df
                             st.session_state["lookup_tables"] = lookup_tables
                             st.success(f"Loaded **{len(ref_df)}** {object_name} records.")
@@ -377,15 +425,35 @@ def main() -> None:
                 with st.expander("View picklist fields in main file"):
                     st.write(", ".join(picklist_columns))
 
-            field_def_upload = st.file_uploader(
-                "Object field definition file",
-                type=["xlsx", "xls"],
-                key="field_definition_upload",
-            )
-            if field_def_upload:
+            field_def_source = "Upload from computer"
+            if workflow_cloud_enabled(cloud, username):
+                field_def_source = st.radio(
+                    "Field definition source",
+                    ["Upload from computer", "Load from cloud"],
+                    horizontal=True,
+                    key="field_def_workflow_source",
+                )
+
+            field_def_file = None
+            if field_def_source == "Load from cloud" and cloud:
+                field_def_file, _field_cloud_key = load_workflow_file_from_cloud(
+                    cloud,
+                    username,
+                    "field_definitions",
+                    "field_definition_cloud_select",
+                )
+            else:
+                field_def_file = st.file_uploader(
+                    "Object field definition file",
+                    type=["xlsx", "xls"],
+                    key="field_definition_upload",
+                )
+
+            if field_def_file:
                 try:
-                    field_def_upload.seek(0)
-                    field_def = read_object_field_definition(field_def_upload)
+                    if hasattr(field_def_file, "seek"):
+                        field_def_file.seek(0)
+                    field_def = read_object_field_definition(field_def_file)
                     st.session_state["field_definition"] = field_def
                     matched = [
                         col

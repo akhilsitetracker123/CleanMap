@@ -6,7 +6,14 @@ from typing import Any
 
 import streamlit as st
 
-from cloud_storage import CloudStorage, friendly_cloud_error, guess_mime, read_source_bytes
+from cloud_storage import (
+    CloudFile,
+    CloudStorage,
+    bytes_to_filelike,
+    friendly_cloud_error,
+    guess_mime,
+    read_source_bytes,
+)
 
 CLOUD_CATEGORIES = (
     ("uploads", "Main Excel"),
@@ -16,6 +23,73 @@ CLOUD_CATEGORIES = (
 )
 
 CATEGORY_LABELS = dict(CLOUD_CATEGORIES)
+
+
+def workflow_cloud_enabled(cloud: CloudStorage | None, username: str) -> bool:
+    return cloud is not None and username != "local"
+
+
+def cloud_file_label(item: CloudFile) -> str:
+    return f"{display_file_name(item.name)} · {CATEGORY_LABELS.get(item.category, item.category)}"
+
+
+def filter_lookup_cloud_files(files: list[CloudFile], object_name: str) -> list[CloudFile]:
+    """Prefer lookup files named for this object (e.g. Account_...)."""
+    needle = object_name.lower()
+    prefixed = [f for f in files if f.name.lower().startswith(f"{needle}_")]
+    if prefixed:
+        return prefixed
+    matched = [f for f in files if needle in f.name.lower()]
+    return matched or files
+
+
+def load_workflow_file_from_cloud(
+    cloud: CloudStorage,
+    username: str,
+    category: str,
+    selectbox_key: str,
+    *,
+    object_name: str | None = None,
+    empty_message: str | None = None,
+) -> tuple[object | None, str | None]:
+    """
+    Show a cloud file dropdown and return (file-like source, cache key).
+    """
+    try:
+        files = cloud.list_files(username, category)
+    except Exception as exc:
+        st.error(friendly_cloud_error(exc))
+        return None, None
+
+    if object_name and category == "lookups":
+        files = filter_lookup_cloud_files(files, object_name)
+
+    if not files:
+        st.info(
+            empty_message
+            or "No matching files in cloud. Use sidebar **Upload files to cloud** first "
+            f"(category: {CATEGORY_LABELS.get(category, category)})."
+        )
+        return None, None
+
+    options = {cloud_file_label(item): item for item in files}
+    labels = list(options.keys())
+    selected_label = st.selectbox(
+        "Choose from cloud",
+        options=labels,
+        key=selectbox_key,
+    )
+    item = options[selected_label]
+    try:
+        data = cloud.download_bytes(item.path)
+    except Exception as exc:
+        st.error(friendly_cloud_error(exc))
+        return None, None
+
+    display_name = display_file_name(item.name)
+    source = bytes_to_filelike(data, display_name)
+    st.success(f"Loaded from cloud: **{display_name}**")
+    return source, f"cloud:{item.path}"
 
 
 def display_file_name(storage_name: str) -> str:
@@ -50,7 +124,9 @@ def render_cloud_storage_sidebar(cloud: CloudStorage, username: str) -> None:
     if not st.toggle("Upload files to cloud", key="cloud_storage_open"):
         return
 
-    st.caption("Store Excel files in your private cloud folder. This is separate from Step 1.")
+    st.caption(
+        "Store files here, or load saved files in Steps 1, 3, and 4 via **Load from cloud**."
+    )
 
     category = st.selectbox(
         "File type",

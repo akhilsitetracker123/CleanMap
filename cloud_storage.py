@@ -168,8 +168,9 @@ def guess_mime(filename: str) -> str:
     return MIME_XLSX
 
 
-def bytes_to_filelike(data: bytes) -> io.BytesIO:
+def bytes_to_filelike(data: bytes, filename: str = "upload.xlsx") -> io.BytesIO:
     buffer = io.BytesIO(data)
+    buffer.name = filename
     buffer.seek(0)
     return buffer
 
