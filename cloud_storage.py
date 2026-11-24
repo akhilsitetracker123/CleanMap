@@ -22,6 +22,14 @@ class CloudFile:
     updated_at: str | None
 
 
+def normalize_supabase_url(url: str) -> str:
+    """Normalize Project URL from Supabase dashboard (Settings → API)."""
+    cleaned = str(url).strip().strip('"').strip("'").rstrip("/")
+    if cleaned and not cleaned.startswith(("http://", "https://")):
+        cleaned = f"https://{cleaned}"
+    return cleaned
+
+
 def cloud_is_configured() -> bool:
     try:
         cloud = st.secrets.get("cloud", {})
@@ -51,9 +59,9 @@ def get_cloud_storage() -> "CloudStorage | None":
     if cached is None:
         cloud = st.secrets["cloud"]
         st.session_state[_CLOUD_STORAGE_KEY] = CloudStorage(
-            url=str(cloud["supabase_url"]),
-            key=str(cloud["supabase_key"]),
-            bucket=str(cloud["bucket"]),
+            url=normalize_supabase_url(str(cloud["supabase_url"])),
+            key=str(cloud["supabase_key"]).strip(),
+            bucket=str(cloud["bucket"]).strip(),
         )
     return st.session_state[_CLOUD_STORAGE_KEY]
 
@@ -176,3 +184,26 @@ def _coerce_int(value: Any) -> int | None:
         return int(value) if value is not None else None
     except (TypeError, ValueError):
         return None
+
+
+def friendly_cloud_error(exc: Exception) -> str:
+    """User-safe message for Supabase / network failures (no secrets)."""
+    name = type(exc).__name__
+    text = str(exc).lower()
+    if "connecterror" in name.lower() or "connect" in text or "nodename" in text:
+        return (
+            "Could not connect to Supabase. Check that **supabase_url** in Streamlit "
+            "Cloud secrets matches your active project (Supabase → Settings → API → "
+            "Project URL). Paused or deleted projects will fail with this error."
+        )
+    if "401" in text or "unauthorized" in text or "invalid" in text and "api" in text:
+        return (
+            "Supabase rejected the API key. Use the **service_role** (secret) key in "
+            "**supabase_key**, not the anon key."
+        )
+    if "404" in text or "bucket" in text or "not found" in text:
+        return (
+            "Storage bucket not found. Create a private bucket named **cleanmap-files** "
+            "(or match the **bucket** value in secrets)."
+        )
+    return f"Cloud storage error ({name}). Check Supabase URL, service key, and bucket name."

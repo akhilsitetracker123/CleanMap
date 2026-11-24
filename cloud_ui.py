@@ -6,7 +6,7 @@ from typing import Any
 
 import streamlit as st
 
-from cloud_storage import CloudStorage, guess_mime, read_source_bytes
+from cloud_storage import CloudStorage, friendly_cloud_error, guess_mime, read_source_bytes
 
 CLOUD_CATEGORIES = (
     ("uploads", "Main Excel"),
@@ -82,7 +82,7 @@ def render_cloud_storage_sidebar(cloud: CloudStorage, username: str) -> None:
                 st.session_state.pop("cloud_last_error", None)
                 st.rerun()
             except Exception as exc:
-                st.error(f"Upload failed: {exc}")
+                st.error(friendly_cloud_error(exc))
 
     last_action = st.session_state.pop("cloud_last_action", None)
     if last_action == "uploaded":
@@ -94,7 +94,16 @@ def render_cloud_storage_sidebar(cloud: CloudStorage, username: str) -> None:
         st.error(f"Cloud action failed: {cloud_error}")
 
     st.markdown("##### All files in cloud")
-    files = cloud.list_all_files(username)
+    try:
+        files = cloud.list_all_files(username)
+    except Exception as exc:
+        st.error(friendly_cloud_error(exc))
+        st.caption(
+            "Update secrets at share.streamlit.io → your app → Settings → Secrets, "
+            "then redeploy. See CLOUD_SETUP.md in the GitHub repo."
+        )
+        return
+
     if not files:
         st.caption("No files in cloud yet.")
         return
